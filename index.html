@@ -1,0 +1,639 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>STAR FORCE</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html, body {
+    background:#0a0a1a;
+    width:100%; height:100%;
+    overflow:hidden;
+    position:fixed; /* iOS バウンススクロール防止 */
+    font-family:'Courier New',monospace;
+    touch-action:none;
+  }
+  body {
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    justify-content:center;
+  }
+  #gameContainer { position:relative; flex-shrink:0; }
+  canvas {
+    display:block;
+    border:1px solid #1a1a4a;
+    box-shadow:0 0 30px #0033ff44;
+    touch-action:none;
+  }
+  #ui {
+    position:absolute;
+    top:0; left:0; right:0;
+    display:flex;
+    justify-content:space-between;
+    padding:10px 14px;
+    pointer-events:none;
+    color:#aaddff;
+    font-size:14px;
+    text-shadow:0 0 8px #00aaff;
+  }
+  #overlay {
+    position:absolute; inset:0;
+    display:flex; flex-direction:column;
+    align-items:center; justify-content:center;
+    background:rgba(0,0,20,0.85);
+    color:#aaddff; text-align:center; gap:16px;
+  }
+  #overlay h1 { font-size:clamp(24px,8vw,36px); color:#44ccff; text-shadow:0 0 20px #0088ff; letter-spacing:4px; }
+  #overlay h2 { font-size:clamp(20px,6vw,28px); color:#ff4466; text-shadow:0 0 20px #ff0044; }
+  #overlay p  { font-size:clamp(12px,3.5vw,15px); line-height:1.8; color:#88bbdd; }
+  #overlay .score-display { font-size:clamp(16px,5vw,22px); color:#ffcc44; text-shadow:0 0 12px #ff8800; }
+  #overlay .loading { font-size:18px; color:#44ccff; animation:pulse 1s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+  button.gameBtn {
+    padding:12px 36px; font-size:clamp(14px,4vw,18px);
+    font-family:'Courier New',monospace;
+    background:transparent; color:#44ccff;
+    border:2px solid #44ccff; cursor:pointer;
+    letter-spacing:3px; text-shadow:0 0 10px #0088ff;
+    box-shadow:0 0 18px #0055aa44;
+    transition:all 0.2s;
+    -webkit-appearance:none;
+    appearance:none;
+  }
+  button.gameBtn:hover, button.gameBtn:active {
+    background:#44ccff22; box-shadow:0 0 28px #0088ffaa;
+  }
+  /* ── モバイル操作UI ─────────────────── */
+  #mobileUI {
+    display:none;
+    width:100%;
+    justify-content:space-between;
+    align-items:center;
+    padding:8px 20px;
+    padding-bottom:calc(8px + env(safe-area-inset-bottom, 0px));
+    background:rgba(0,0,20,0.7);
+    flex-shrink:0;
+    gap:12px;
+  }
+  #mobileUI.visible { display:flex; }
+  .mobileHint {
+    color:#4499cc; font-size:11px; text-align:center; flex:1;
+    line-height:1.4;
+  }
+  #bombBtnMobile {
+    padding:14px 28px; font-size:15px;
+    font-family:'Courier New',monospace;
+    background:rgba(68,170,255,0.15);
+    color:#44aaff; border:2px solid #44aaff;
+    border-radius:10px; cursor:pointer;
+    text-shadow:0 0 8px #0055ff;
+    box-shadow:0 0 12px #0044aa44;
+    -webkit-appearance:none;
+    appearance:none;
+    user-select:none; -webkit-user-select:none;
+  }
+  #bombBtnMobile:active { background:rgba(68,170,255,0.35); }
+  .hidden { display:none !important; }
+</style>
+</head>
+<body>
+
+<svg xmlns="http://www.w3.org/2000/svg" width="0" height="0" style="position:absolute;overflow:hidden">
+  <defs>
+    <filter id="rm-white" color-interpolation-filters="sRGB">
+      <feColorMatrix type="matrix"
+        values="1 0 0 0 0
+                0 1 0 0 0
+                0 0 1 0 0
+               -1 -1 -1 3 0"/>
+    </filter>
+  </defs>
+</svg>
+
+<div id="gameContainer">
+  <canvas id="c"></canvas>
+  <div id="ui">
+    <span id="scoreUI">SCORE: 0</span>
+    <span id="levelUI">LEVEL: 1</span>
+    <span id="livesUI">LIVES: ♥♥♥</span>
+  </div>
+  <div id="overlay">
+    <p class="loading">読み込み中...</p>
+  </div>
+</div>
+
+<!-- スマホ用ボムボタン -->
+<div id="mobileUI">
+  <div class="mobileHint">タップで移動<br>自動ショット</div>
+  <button id="bombBtnMobile">💣 BOMB</button>
+</div>
+
+<script>
+const canvas = document.getElementById('c');
+const ctx    = canvas.getContext('2d');
+const W = 400, H = 600;
+canvas.width = W; canvas.height = H;
+
+const overlay     = document.getElementById('overlay');
+const scoreUI     = document.getElementById('scoreUI');
+const levelUI     = document.getElementById('levelUI');
+const livesUI     = document.getElementById('livesUI');
+const mobileUI    = document.getElementById('mobileUI');
+const bombBtnMob  = document.getElementById('bombBtnMobile');
+
+// ─── モバイル判定・リサイズ ─────────────────────────────────────────────────────
+const isMobile = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
+
+function resizeGame() {
+  const mobileBarH = isMobile ? (mobileUI.offsetHeight || 70) : 0;
+  const availW = window.innerWidth;
+  const availH = window.innerHeight - mobileBarH;
+  const scale  = Math.min(availW / W, availH / H);
+  canvas.style.width  = (W * scale) + 'px';
+  canvas.style.height = (H * scale) + 'px';
+  document.getElementById('gameContainer').style.width = (W * scale) + 'px';
+}
+window.addEventListener('resize', resizeGame);
+window.addEventListener('orientationchange', () => setTimeout(resizeGame, 150));
+
+if (isMobile) mobileUI.classList.add('visible');
+
+// ─── Images ───────────────────────────────────────────────────────────────────
+const IMG = {};
+
+function removeWhiteBackground(img) {
+  const w = img.naturalWidth || img.width;
+  const h = img.naturalHeight || img.height;
+  try {
+    const oc = document.createElement('canvas');
+    oc.width = w; oc.height = h;
+    const ox = oc.getContext('2d');
+    ox.drawImage(img, 0, 0);
+    const d = ox.getImageData(0, 0, w, h);
+    const px = d.data;
+    const visited = new Uint8Array(w * h);
+    const isWhitish = i => px[i*4]>210 && px[i*4+1]>210 && px[i*4+2]>210;
+    const q = [];
+    const tryAdd = i => { if(i>=0&&i<w*h&&!visited[i]&&isWhitish(i)){visited[i]=1;q.push(i);} };
+    for (let x=0;x<w;x++){tryAdd(x);tryAdd((h-1)*w+x);}
+    for (let y=0;y<h;y++){tryAdd(y*w);tryAdd(y*w+w-1);}
+    let qi=0;
+    while (qi<q.length){const i=q[qi++],x=i%w,y=(i/w)|0;
+      if(x>0)tryAdd(i-1);if(x<w-1)tryAdd(i+1);if(y>0)tryAdd(i-w);if(y<h-1)tryAdd(i+w);}
+    for (let i=0;i<w*h;i++){
+      if(!visited[i])continue;
+      const p=i*4,m=Math.min(px[p],px[p+1],px[p+2]);
+      px[p+3]=Math.max(0,Math.round((255-m)*2));
+    }
+    ox.putImageData(d,0,0);
+    return oc;
+  } catch(_){}
+  try {
+    const oc=document.createElement('canvas'); oc.width=w; oc.height=h;
+    const ox=oc.getContext('2d');
+    ox.filter='url(#rm-white)'; ox.drawImage(img,0,0); ox.filter='none';
+    return oc;
+  } catch(_){}
+  return img;
+}
+
+function loadImages() {
+  return new Promise(resolve => {
+    const sources = {
+      player: encodeURI('画像/BCO.e75b81ff-55ab-4170-bb01-6df975b377c8.png'),
+      dog:    encodeURI('画像/BCO.bd9d0140-f79e-4d21-8104-47f9f6a4a81a.png')
+    };
+    let remaining = Object.keys(sources).length;
+    const done = () => { if (--remaining===0) resolve(); };
+    Object.entries(sources).forEach(([key,src]) => {
+      const img = new Image();
+      img.onload  = () => { try{IMG[key]=removeWhiteBackground(img);}catch(_){IMG[key]=img;} done(); };
+      img.onerror = () => done();
+      img.src = src;
+    });
+    setTimeout(resolve, 5000);
+  });
+}
+
+// ─── State ───────────────────────────────────────────────────────────────────
+let state = 'title';
+let score, lives, level, frame, bombs, combo, comboTimer;
+let player, bullets, enemies, enemyBullets, particles, stars, powerups;
+let bossActive, bossHP, bossMaxHP, nextBossScore;
+let invincible, invincibleTimer, levelUpTimer;
+const keys = {};
+let shotCooldown = 0;
+
+// ─── タッチ入力 ───────────────────────────────────────────────────────────────
+let touchActive = false;
+let touchTargetX = W/2, touchTargetY = H-80;
+
+function updateTouchPos(touch) {
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = W / rect.width;
+  const scaleY = H / rect.height;
+  touchTargetX = (touch.clientX - rect.left) * scaleX;
+  touchTargetY = (touch.clientY - rect.top)  * scaleY - 80; // 指の80px上
+}
+
+canvas.addEventListener('touchstart', e => {
+  e.preventDefault();
+  if (state === 'playing') { touchActive = true; updateTouchPos(e.touches[0]); }
+}, { passive: false });
+canvas.addEventListener('touchmove', e => {
+  e.preventDefault();
+  if (touchActive) updateTouchPos(e.touches[0]);
+}, { passive: false });
+canvas.addEventListener('touchend', e => {
+  e.preventDefault();
+  if (e.touches.length === 0) touchActive = false;
+}, { passive: false });
+canvas.addEventListener('touchcancel', e => { touchActive = false; }, { passive: false });
+
+bombBtnMob.addEventListener('touchstart', e => {
+  e.preventDefault();
+  if (state === 'playing') useBomb();
+}, { passive: false });
+
+// ─── Init ─────────────────────────────────────────────────────────────────────
+function initGame() {
+  score=0; lives=3; level=1; frame=0; bombs=3;
+  combo=0; comboTimer=0;
+  bossActive=false; bossHP=0; bossMaxHP=0; nextBossScore=500;
+  invincible=false; invincibleTimer=0; levelUpTimer=0; shotCooldown=0;
+  touchActive=false;
+  player={x:W/2, y:H-80, w:32, h:32, speed:4};
+  bullets=[]; enemies=[]; enemyBullets=[]; particles=[]; powerups=[];
+  stars=Array.from({length:120},()=>({
+    x:Math.random()*W, y:Math.random()*H,
+    r:Math.random()*1.5+0.3, speed:Math.random()*1.2+0.3, brightness:Math.random()
+  }));
+}
+
+// ─── Player drawing ───────────────────────────────────────────────────────────
+function drawPlayer() {
+  if (invincible&&frame%6<3) return;
+  const {x,y}=player;
+  ctx.save();
+  const fh=14+Math.sin(frame*0.3)*5;
+  const grad=ctx.createLinearGradient(x,y+28,x,y+28+fh);
+  grad.addColorStop(0,'#ffffff'); grad.addColorStop(0.25,'#88ddff'); grad.addColorStop(1,'transparent');
+  ctx.fillStyle=grad; ctx.shadowBlur=16; ctx.shadowColor='#0055ff';
+  ctx.beginPath(); ctx.moveTo(x-9,y+28); ctx.lineTo(x+9,y+28); ctx.lineTo(x,y+28+fh); ctx.closePath(); ctx.fill();
+  if (IMG.player) { ctx.shadowBlur=22; ctx.shadowColor='#00aaff'; ctx.drawImage(IMG.player,x-32,y-32,64,64); }
+  else { ctx.fillStyle='#aaddff'; ctx.beginPath(); ctx.moveTo(x,y-16); ctx.lineTo(x+14,y+16); ctx.lineTo(x-14,y+16); ctx.closePath(); ctx.fill(); }
+  ctx.restore();
+}
+
+// ─── Dog sprite ───────────────────────────────────────────────────────────────
+const DOG_OY = 8;
+
+function drawDog(size, glowColor, glowSize) {
+  ctx.shadowBlur=glowSize; ctx.shadowColor=glowColor;
+  if (IMG.dog) ctx.drawImage(IMG.dog,-size/2,-size/2+DOG_OY,size,size);
+  else { ctx.fillStyle=glowColor; ctx.beginPath(); ctx.arc(0,DOG_OY,size/2,0,Math.PI*2); ctx.fill(); }
+}
+
+function drawCrown(dogSize) {
+  const top=-dogSize/2+DOG_OY-6;
+  ctx.shadowBlur=18; ctx.shadowColor='#ffaa00'; ctx.fillStyle='#FFD700';
+  ctx.beginPath();
+  ctx.moveTo(-22,top); ctx.lineTo(-22,top-10); ctx.lineTo(-13,top-20);
+  ctx.lineTo(-6,top-8); ctx.lineTo(0,top-26); ctx.lineTo(6,top-8);
+  ctx.lineTo(13,top-20); ctx.lineTo(22,top-10); ctx.lineTo(22,top);
+  ctx.closePath(); ctx.fill(); ctx.fillRect(-22,top,44,7);
+  [[-14,top-10,'#ff4444'],[0,top-16,'#44aaff'],[14,top-10,'#44ff88']].forEach(([gx,gy,gc])=>{
+    ctx.fillStyle=gc; ctx.shadowColor=gc; ctx.shadowBlur=10;
+    ctx.beginPath(); ctx.arc(gx,gy,3.5,0,Math.PI*2); ctx.fill();
+  });
+}
+
+// ─── Enemy types ─────────────────────────────────────────────────────────────
+function spawnEnemy() {
+  const types=['zako','shooter','tank'];
+  let w=[6,3,1];
+  if(level>=3)w=[4,4,2]; if(level>=5)w=[3,4,3];
+  const tot=w.reduce((a,b)=>a+b,0); let r=Math.random()*tot,type='zako';
+  for(let i=0;i<types.length;i++){r-=w[i];if(r<=0){type=types[i];break;}}
+  const e={type,x:30+Math.random()*(W-60),y:-30,hp:1,maxHp:1,
+    shotTimer:Math.floor(Math.random()*80),moveTimer:0,
+    speed:1.5+level*0.15,vx:(Math.random()-0.5)*1.2};
+  if(type==='tank'){e.hp=4;e.maxHp=4;e.speed*=0.6;}
+  if(type==='shooter'){e.hp=2;e.maxHp=2;e.speed*=0.8;}
+  enemies.push(e);
+}
+
+function spawnBoss() {
+  bossActive=true;
+  const hp=60+level*40;
+  enemies.push({type:'boss',x:W/2,y:-80,w:100,h:100,hp,maxHp:hp,
+    phase:0,shotTimer:0,moveTimer:0,speed:1.2,vx:1});
+  bossHP=hp; bossMaxHP=hp;
+}
+
+const DOG_SIZE={zako:32,shooter:34,tank:42};
+const DOG_GLOW={zako:'#ff8800',shooter:'#cc00ff',tank:'#00ff88'};
+const BOSS_SIZE=120;
+
+function drawEnemy(e) {
+  ctx.save(); ctx.translate(e.x,e.y);
+  if (e.type==='boss') {
+    const aR=BOSS_SIZE/2+18+Math.sin(frame*0.07)*8;
+    const aA=[0.15,0.22,0.30][e.phase];
+    const aC=['255,136,0','255,68,0','255,0,0'][e.phase];
+    ctx.shadowBlur=0; ctx.fillStyle=`rgba(${aC},${aA})`;
+    ctx.beginPath(); ctx.arc(0,DOG_OY,aR,0,Math.PI*2); ctx.fill();
+    const gc=['#ff8800','#ff4400','#ff0000'][e.phase];
+    const gs=[20,32,48][e.phase];
+    const shk=e.phase===2?(Math.random()-0.5)*5:0;
+    ctx.save(); ctx.translate(shk,0); drawDog(BOSS_SIZE,gc,gs); drawCrown(BOSS_SIZE); ctx.restore();
+    const bw=110,bh=10,by=BOSS_SIZE/2+DOG_OY+6;
+    ctx.shadowBlur=0;
+    ctx.fillStyle='#220000'; ctx.fillRect(-bw/2,by,bw,bh);
+    ctx.fillStyle=`hsl(${(e.hp/e.maxHp)*120},100%,50%)`; ctx.fillRect(-bw/2,by,bw*(e.hp/e.maxHp),bh);
+    ctx.strokeStyle='#ffffff44'; ctx.lineWidth=1; ctx.strokeRect(-bw/2,by,bw,bh);
+  } else {
+    const sz=DOG_SIZE[e.type]||32, glow=DOG_GLOW[e.type]||'#ff8800';
+    drawDog(sz,glow,12);
+    if (e.type==='tank') {
+      const frac=e.hp/e.maxHp; ctx.shadowBlur=0;
+      ctx.fillStyle='#003322'; ctx.fillRect(-14,sz/2+DOG_OY+2,28,5);
+      ctx.fillStyle=`hsl(${frac*120},100%,45%)`; ctx.fillRect(-14,sz/2+DOG_OY+2,28*frac,5);
+    }
+  }
+  ctx.restore();
+}
+
+// ─── Bullets ──────────────────────────────────────────────────────────────────
+function drawBullet(b) {
+  ctx.save(); ctx.shadowBlur=10;
+  if (b.friendly) {
+    ctx.shadowColor='#00ffff'; ctx.fillStyle='#88ffff'; ctx.fillRect(b.x-2,b.y-8,4,16);
+    ctx.fillStyle='#ffffff'; ctx.fillRect(b.x-1,b.y-10,2,6);
+  } else {
+    ctx.shadowColor=b.color||'#ff4400'; ctx.fillStyle=b.color||'#ff8844';
+    ctx.beginPath(); ctx.arc(b.x,b.y,b.r||4,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='#ffffff88'; ctx.beginPath(); ctx.arc(b.x-1,b.y-1,(b.r||4)*0.4,0,Math.PI*2); ctx.fill();
+  }
+  ctx.restore();
+}
+
+// ─── Particles ────────────────────────────────────────────────────────────────
+function spawnExplosion(x,y,color='#ff8800',count=18) {
+  for(let i=0;i<count;i++){const ang=Math.random()*Math.PI*2,spd=Math.random()*4+1;
+    particles.push({x,y,vx:Math.cos(ang)*spd,vy:Math.sin(ang)*spd,life:1,decay:Math.random()*0.04+0.02,r:Math.random()*4+1,color});}
+}
+function spawnPowerup(x,y){
+  if(Math.random()<0.25) powerups.push({x,y,type:Math.random()<0.5?'bomb':'life',vy:1.5});
+}
+
+// ─── Shooting ─────────────────────────────────────────────────────────────────
+function playerShoot() {
+  const offsets=[0];
+  if(level>=2)offsets.push(-12,12);
+  if(level>=4)offsets.push(-24,24);
+  offsets.forEach(dx=>bullets.push({x:player.x+dx,y:player.y-24,vy:-14,friendly:true}));
+}
+
+function enemyShoot(e) {
+  const dx=player.x-e.x,dy=player.y-e.y,dist=Math.hypot(dx,dy)||1;
+  const spd=3.5+level*0.2;
+  const oy=e.type==='boss'?e.y+BOSS_SIZE/2+DOG_OY:e.y+18;
+  if (e.type==='boss') {
+    if(e.phase===0){for(let i=-2;i<=2;i++){const ang=Math.atan2(dy,dx)+i*0.22;
+      enemyBullets.push({x:e.x,y:oy,vx:Math.cos(ang)*spd,vy:Math.sin(ang)*spd,r:5,color:'#ff4400'});}}
+    else if(e.phase===1){
+      enemyBullets.push({x:e.x,y:oy,vx:dx/dist*spd*1.3,vy:dy/dist*spd*1.3,r:5,color:'#ff0088'});
+      for(let i=0;i<8;i++){const ang=(i/8)*Math.PI*2;
+        enemyBullets.push({x:e.x,y:oy,vx:Math.cos(ang)*3,vy:Math.sin(ang)*3,r:4,color:'#ff6600'});}}
+    else enemyBullets.push({x:e.x,y:oy,vx:dx/dist*spd*1.5,vy:dy/dist*spd*1.5,r:4,color:'#ffff00'});
+  } else if(e.type==='shooter')
+    enemyBullets.push({x:e.x,y:oy,vx:dx/dist*spd,vy:dy/dist*spd,r:4,color:'#dd44ff'});
+  else enemyBullets.push({x:e.x,y:oy,vx:0,vy:spd,r:4,color:'#ff8800'});
+}
+
+// ─── Bomb ─────────────────────────────────────────────────────────────────────
+function useBomb() {
+  if(bombs<=0)return; bombs--; updateUI();
+  spawnExplosion(W/2,H/2,'#44aaff',60); enemyBullets=[];
+  enemies.forEach(e=>{if(e.type!=='boss'){spawnExplosion(e.x,e.y,'#ffaa00',12);score+=50;combo++;}});
+  enemies=enemies.filter(e=>e.type==='boss');
+  if(bossActive){const b=enemies.find(e=>e.type==='boss');if(b){b.hp-=10;bossHP=b.hp;}}
+}
+
+function circleRect(cx,cy,cr,rx,ry,rw,rh){
+  const nx=Math.max(rx-rw/2,Math.min(cx,rx+rw/2)),ny=Math.max(ry-rh/2,Math.min(cy,ry+rh/2));
+  return Math.hypot(cx-nx,cy-ny)<cr;
+}
+
+// ─── Update ───────────────────────────────────────────────────────────────────
+function update() {
+  frame++;
+  stars.forEach(s=>{s.y+=s.speed;if(s.y>H){s.y=-2;s.x=Math.random()*W;}});
+
+  // キーボード移動
+  const sp=player.speed;
+  if((keys['ArrowLeft']||keys['a']||keys['A'])&&player.x>20)  player.x-=sp;
+  if((keys['ArrowRight']||keys['d']||keys['D'])&&player.x<W-20)player.x+=sp;
+  if((keys['ArrowUp']||keys['w']||keys['W'])&&player.y>60)    player.y-=sp;
+  if((keys['ArrowDown']||keys['s']||keys['S'])&&player.y<H-20) player.y+=sp;
+
+  // タッチ移動（モバイル）
+  if (touchActive) {
+    const tdx=touchTargetX-player.x, tdy=touchTargetY-player.y;
+    const td=Math.hypot(tdx,tdy);
+    if (td>4) {
+      const mv=Math.min(td*0.18, sp*2.8);
+      player.x=Math.max(20,Math.min(W-20, player.x+(tdx/td)*mv));
+      player.y=Math.max(60,Math.min(H-20, player.y+(tdy/td)*mv));
+    }
+  }
+
+  // ショット（キーボード or モバイル自動連射）
+  shotCooldown--;
+  const sr=Math.max(8-level,3);
+  if(((keys[' ']||keys['z']||keys['Z'])||touchActive)&&shotCooldown<=0){
+    playerShoot(); shotCooldown=sr;
+  }
+
+  if(invincible){invincibleTimer--;if(invincibleTimer<=0)invincible=false;}
+  if(levelUpTimer>0)levelUpTimer--;
+  if(comboTimer>0){comboTimer--;if(comboTimer===0)combo=0;}
+
+  if(!bossActive){
+    const sr2=Math.max(90-level*8,22);
+    if(frame%sr2===0)spawnEnemy();
+    if(score>=nextBossScore&&enemies.length<4){spawnBoss();nextBossScore+=800+level*200;}
+  }
+
+  bullets=bullets.filter(b=>{b.y+=b.vy;return b.y>-20&&b.y<H+20;});
+  enemyBullets=enemyBullets.filter(b=>{b.x+=b.vx;b.y+=b.vy;return b.x>-20&&b.x<W+20&&b.y>-20&&b.y<H+20;});
+
+  enemies=enemies.filter(e=>{
+    if(e.type==='boss'){
+      e.x+=e.vx*e.speed; if(e.x<70||e.x>W-70)e.vx*=-1;
+      if(e.y<130)e.y+=0.8; e.moveTimer++;
+      if(e.moveTimer%60===0)e.vx=(Math.random()-0.5)*3;
+      e.phase=e.hp<e.maxHp*0.33?2:e.hp<e.maxHp*0.66?1:0;
+      e.shotTimer++;if(e.shotTimer>=[70,50,35][e.phase]){enemyShoot(e);e.shotTimer=0;}
+    } else {
+      e.y+=e.speed; e.x+=e.vx; if(e.x<20||e.x>W-20)e.vx*=-1;
+      e.shotTimer++;
+      const si=e.type==='shooter'?Math.max(100-level*8,40):Math.max(120-level*6,60);
+      if(e.shotTimer>=si){enemyShoot(e);e.shotTimer=0;}
+    }
+    bullets.forEach((b,bi)=>{
+      if(!b.friendly)return;
+      const hit=e.type==='boss'?circleRect(b.x,b.y,6,e.x,e.y,e.w||100,e.h||100):Math.hypot(b.x-e.x,b.y-e.y)<18;
+      if(hit){e.hp--;bullets.splice(bi,1);spawnExplosion(b.x,b.y,'#ffffff',5);}
+    });
+    if(e.hp<=0){
+      const pts=e.type==='boss'?500+level*100:e.type==='tank'?80:e.type==='shooter'?40:10;
+      combo++;comboTimer=120; score+=pts*Math.min(combo,8);
+      spawnExplosion(e.x,e.y,e.type==='boss'?'#ff4400':'#ff8800',e.type==='boss'?60:18);
+      if(e.type==='boss'){bossActive=false;levelUp();}
+      spawnPowerup(e.x,e.y); updateUI(); return false;
+    }
+    return e.y<H+80;
+  });
+
+  if(!invincible){
+    enemyBullets=enemyBullets.filter(b=>{
+      if(Math.hypot(b.x-player.x,b.y-player.y)<12){hitPlayer();return false;}return true;
+    });
+    enemies.forEach(e=>{
+      const hit=e.type==='boss'?circleRect(player.x,player.y,14,e.x,e.y,e.w||100,e.h||100):Math.hypot(player.x-e.x,player.y-e.y)<24;
+      if(hit)hitPlayer();
+    });
+  }
+
+  powerups=powerups.filter(p=>{
+    p.y+=p.vy;
+    if(Math.hypot(p.x-player.x,p.y-player.y)<22){
+      if(p.type==='bomb')bombs=Math.min(bombs+1,3);else lives=Math.min(lives+1,5);
+      spawnExplosion(p.x,p.y,p.type==='bomb'?'#44aaff':'#ff44aa',12);
+      updateUI();return false;
+    }
+    return p.y<H+30;
+  });
+
+  particles=particles.filter(p=>{p.x+=p.vx;p.y+=p.vy;p.vy+=0.05;p.life-=p.decay;return p.life>0;});
+  updateUI();
+}
+
+function hitPlayer(){
+  spawnExplosion(player.x,player.y,'#ffaaff',25);
+  lives--;invincible=true;invincibleTimer=150;combo=0;updateUI();
+  if(lives<=0){state='gameover';showGameOver();}
+}
+function levelUp(){level++;levelUpTimer=180;player.speed=Math.min(player.speed+0.2,6);updateUI();}
+
+// ─── Draw ─────────────────────────────────────────────────────────────────────
+function draw(){
+  ctx.fillStyle='#07071a';ctx.fillRect(0,0,W,H);
+  stars.forEach(s=>{
+    const b=0.3+s.brightness*0.7+Math.sin(frame*0.05+s.x)*0.2;
+    ctx.fillStyle=`rgba(180,210,255,${b})`;ctx.beginPath();ctx.arc(s.x,s.y,s.r,0,Math.PI*2);ctx.fill();
+  });
+  particles.forEach(p=>{
+    ctx.save();ctx.globalAlpha=p.life;ctx.shadowBlur=8;ctx.shadowColor=p.color;ctx.fillStyle=p.color;
+    ctx.beginPath();ctx.arc(p.x,p.y,p.r*p.life,0,Math.PI*2);ctx.fill();ctx.restore();
+  });
+  powerups.forEach(p=>{
+    ctx.save();ctx.translate(p.x,p.y);ctx.shadowBlur=15;
+    const c=p.type==='bomb'?'#44aaff':'#ff44aa';
+    ctx.shadowColor=c;ctx.fillStyle=c;ctx.beginPath();ctx.arc(0,0,10,0,Math.PI*2);ctx.fill();
+    ctx.fillStyle='#fff';ctx.font='bold 12px Courier New';ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.fillText(p.type==='bomb'?'B':'♥',0,0);ctx.restore();
+  });
+  enemyBullets.forEach(drawBullet);
+  bullets.forEach(drawBullet);
+  enemies.forEach(drawEnemy);
+  drawPlayer();
+
+  // ボムHUD（キーボード用）
+  if (!isMobile){
+    ctx.save();ctx.fillStyle='#44aaff';ctx.shadowBlur=8;ctx.shadowColor='#44aaff';
+    ctx.font='13px Courier New';ctx.textBaseline='bottom';
+    ctx.fillText('BOMB: '+'●'.repeat(bombs)+'○'.repeat(Math.max(0,3-bombs)),10,H-8);
+    ctx.restore();
+  }
+
+  if(combo>=3&&comboTimer>0){
+    ctx.save();ctx.globalAlpha=Math.min(comboTimer/30,1);ctx.fillStyle='#ffcc44';
+    ctx.shadowBlur=16;ctx.shadowColor='#ff8800';
+    ctx.font=`bold ${14+Math.min(combo,10)}px Courier New`;ctx.textAlign='center';
+    ctx.fillText(`COMBO x${combo}!`,W/2,H-40);ctx.restore();
+  }
+  if(levelUpTimer>0){
+    ctx.save();ctx.globalAlpha=Math.min(levelUpTimer/30,1)*Math.min((180-levelUpTimer)/10,1)+0.1;
+    ctx.fillStyle='#44ffaa';ctx.shadowBlur=20;ctx.shadowColor='#00ff88';
+    ctx.font='bold 28px Courier New';ctx.textAlign='center';
+    ctx.fillText(`LEVEL ${level}`,W/2,H/2-20);ctx.restore();
+  }
+  if(bossActive&&enemies.find(e=>e.type==='boss')?.y<110){
+    ctx.save();
+    ctx.fillStyle=`rgba(255,0,0,${0.5+Math.sin(frame*0.2)*0.3})`;
+    ctx.font='bold 18px Courier New';ctx.textAlign='center';ctx.shadowBlur=12;ctx.shadowColor='#ff0000';
+    ctx.fillText('!! BOSS !!',W/2,50);ctx.restore();
+  }
+}
+
+// ─── UI ───────────────────────────────────────────────────────────────────────
+function updateUI(){
+  scoreUI.textContent='SCORE: '+score.toLocaleString();
+  levelUI.textContent='LEVEL: '+level;
+  livesUI.textContent='LIVES: '+'♥'.repeat(lives)+'♡'.repeat(Math.max(0,5-lives));
+  bombBtnMob.textContent=`💣 ${'●'.repeat(bombs)}${'○'.repeat(Math.max(0,3-bombs))}`;
+}
+
+function showTitle(){
+  overlay.innerHTML=`
+    <h1>STAR FORCE</h1>
+    <p>${isMobile
+      ? 'タップ＆ドラッグ : 移動（自動ショット）<br>BOMB ボタン : ボム'
+      : '← → ↑ ↓ / WASD : 移動<br>スペース / Z : ショット<br>X : ボム（最大3個）'
+    }</p>
+    <button class="gameBtn" id="startBtn">START GAME</button>`;
+  overlay.classList.remove('hidden');
+  document.getElementById('startBtn').addEventListener('click',startGame);
+}
+function showGameOver(){
+  overlay.innerHTML=`
+    <h2>GAME OVER</h2>
+    <div class="score-display">SCORE: ${score.toLocaleString()}</div>
+    <p>LEVEL ${level} 到達</p>
+    <button class="gameBtn" id="startBtn">RETRY</button>`;
+  overlay.classList.remove('hidden');
+  document.getElementById('startBtn').addEventListener('click',startGame);
+}
+
+function loop(){if(state==='playing'){update();draw();}requestAnimationFrame(loop);}
+
+function startGame(){
+  overlay.classList.add('hidden');
+  initGame();updateUI();state='playing';
+}
+
+document.addEventListener('keydown',e=>{
+  keys[e.key]=true;
+  if(e.key==='x'||e.key==='X')useBomb();
+  if([' ','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key))e.preventDefault();
+});
+document.addEventListener('keyup',e=>{keys[e.key]=false;});
+
+// ─── Boot ─────────────────────────────────────────────────────────────────────
+(async()=>{
+  resizeGame();
+  await loadImages();
+  resizeGame();
+  showTitle();
+  loop();
+})();
+</script>
+</body>
+</html>
