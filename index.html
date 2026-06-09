@@ -204,8 +204,9 @@ function removeWhiteBackground(img) {
 function loadImages() {
   return new Promise(resolve => {
     const sources = {
-      player: encodeURI('画像/BCO.e75b81ff-55ab-4170-bb01-6df975b377c8.png'),
-      dog:    encodeURI('画像/BCO.bd9d0140-f79e-4d21-8104-47f9f6a4a81a.png')
+      // dog = 主人公（クマ）, penguin = 敵（ペンギン）
+      dog:     encodeURI('画像/BCO.bd9d0140-f79e-4d21-8104-47f9f6a4a81a.png'),
+      penguin: encodeURI('画像/BCO.e75b81ff-55ab-4170-bb01-6df975b377c8.png')
     };
     let remaining = Object.keys(sources).length;
     const done = () => { if (--remaining===0) resolve(); };
@@ -222,9 +223,23 @@ function loadImages() {
 // ─── State ───────────────────────────────────────────────────────────────────
 let state = 'title';
 let score, lives, level, frame, bombs, combo, comboTimer;
-let player, bullets, enemies, enemyBullets, particles, stars, powerups;
+let player, bullets, enemies, enemyBullets, particles, stars, powerups, screams;
 let bossActive, bossHP, bossMaxHP, nextBossScore;
 let invincible, invincibleTimer, levelUpTimer;
+
+// ペンギン断末魔バリエーション
+const PENGUIN_SCREAMS = [
+  'ぺえええええええ！！！',
+  'ぺぇぇぇぇぇ！！！！',
+  'ぺ！？！？！？！？',
+  'ぺえええええええええ！！！！',
+  'ぺぇ～～～！！！',
+  'ぺぺぺぺぺぺぺ！！！',
+  'ぺ…（終）',
+  'なぜ…ぺ…',
+  'ぎゃあ！ぺえ！',
+  'まだぺえ！まだぺえ！',
+];
 const keys = {};
 let shotCooldown = 0;
 
@@ -267,7 +282,7 @@ function initGame() {
   invincible=false; invincibleTimer=0; levelUpTimer=0; shotCooldown=0;
   touchActive=false;
   player={x:W/2, y:H-80, w:32, h:32, speed:4};
-  bullets=[]; enemies=[]; enemyBullets=[]; particles=[]; powerups=[];
+  bullets=[]; enemies=[]; enemyBullets=[]; particles=[]; powerups=[]; screams=[];
   stars=Array.from({length:120},()=>({
     x:Math.random()*W, y:Math.random()*H,
     r:Math.random()*1.5+0.3, speed:Math.random()*1.2+0.3, brightness:Math.random()
@@ -284,22 +299,22 @@ function drawPlayer() {
   grad.addColorStop(0,'#ffffff'); grad.addColorStop(0.25,'#88ddff'); grad.addColorStop(1,'transparent');
   ctx.fillStyle=grad; ctx.shadowBlur=16; ctx.shadowColor='#0055ff';
   ctx.beginPath(); ctx.moveTo(x-9,y+28); ctx.lineTo(x+9,y+28); ctx.lineTo(x,y+28+fh); ctx.closePath(); ctx.fill();
-  if (IMG.player) { ctx.shadowBlur=22; ctx.shadowColor='#00aaff'; ctx.drawImage(IMG.player,x-32,y-32,64,64); }
+  if (IMG.dog) { ctx.shadowBlur=22; ctx.shadowColor='#00aaff'; ctx.drawImage(IMG.dog,x-32,y-32,64,64); }
   else { ctx.fillStyle='#aaddff'; ctx.beginPath(); ctx.moveTo(x,y-16); ctx.lineTo(x+14,y+16); ctx.lineTo(x-14,y+16); ctx.closePath(); ctx.fill(); }
   ctx.restore();
 }
 
-// ─── Dog sprite ───────────────────────────────────────────────────────────────
-const DOG_OY = 8;
+// ─── Penguin sprite（敵） ────────────────────────────────────────────────────
+const PENGUIN_OY = 5;
 
-function drawDog(size, glowColor, glowSize) {
+function drawPenguin(size, glowColor, glowSize) {
   ctx.shadowBlur=glowSize; ctx.shadowColor=glowColor;
-  if (IMG.dog) ctx.drawImage(IMG.dog,-size/2,-size/2+DOG_OY,size,size);
-  else { ctx.fillStyle=glowColor; ctx.beginPath(); ctx.arc(0,DOG_OY,size/2,0,Math.PI*2); ctx.fill(); }
+  if (IMG.penguin) ctx.drawImage(IMG.penguin,-size/2,-size/2+PENGUIN_OY,size,size);
+  else { ctx.fillStyle=glowColor; ctx.beginPath(); ctx.arc(0,PENGUIN_OY,size/2,0,Math.PI*2); ctx.fill(); }
 }
 
 function drawCrown(dogSize) {
-  const top=-dogSize/2+DOG_OY-6;
+  const top=-dogSize/2+PENGUIN_OY-6;
   ctx.shadowBlur=18; ctx.shadowColor='#ffaa00'; ctx.fillStyle='#FFD700';
   ctx.beginPath();
   ctx.moveTo(-22,top); ctx.lineTo(-22,top-10); ctx.lineTo(-13,top-20);
@@ -335,8 +350,8 @@ function spawnBoss() {
   bossHP=hp; bossMaxHP=hp;
 }
 
-const DOG_SIZE={zako:32,shooter:34,tank:42};
-const DOG_GLOW={zako:'#ff8800',shooter:'#cc00ff',tank:'#00ff88'};
+const PENGUIN_SIZE={zako:32,shooter:34,tank:42};
+const PENGUIN_GLOW={zako:'#ff8800',shooter:'#cc00ff',tank:'#00ff88'};
 const BOSS_SIZE=120;
 
 function drawEnemy(e) {
@@ -346,23 +361,23 @@ function drawEnemy(e) {
     const aA=[0.15,0.22,0.30][e.phase];
     const aC=['255,136,0','255,68,0','255,0,0'][e.phase];
     ctx.shadowBlur=0; ctx.fillStyle=`rgba(${aC},${aA})`;
-    ctx.beginPath(); ctx.arc(0,DOG_OY,aR,0,Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(0,PENGUIN_OY,aR,0,Math.PI*2); ctx.fill();
     const gc=['#ff8800','#ff4400','#ff0000'][e.phase];
     const gs=[20,32,48][e.phase];
     const shk=e.phase===2?(Math.random()-0.5)*5:0;
-    ctx.save(); ctx.translate(shk,0); drawDog(BOSS_SIZE,gc,gs); drawCrown(BOSS_SIZE); ctx.restore();
-    const bw=110,bh=10,by=BOSS_SIZE/2+DOG_OY+6;
+    ctx.save(); ctx.translate(shk,0); drawPenguin(BOSS_SIZE,gc,gs); drawCrown(BOSS_SIZE); ctx.restore();
+    const bw=110,bh=10,by=BOSS_SIZE/2+PENGUIN_OY+6;
     ctx.shadowBlur=0;
     ctx.fillStyle='#220000'; ctx.fillRect(-bw/2,by,bw,bh);
     ctx.fillStyle=`hsl(${(e.hp/e.maxHp)*120},100%,50%)`; ctx.fillRect(-bw/2,by,bw*(e.hp/e.maxHp),bh);
     ctx.strokeStyle='#ffffff44'; ctx.lineWidth=1; ctx.strokeRect(-bw/2,by,bw,bh);
   } else {
-    const sz=DOG_SIZE[e.type]||32, glow=DOG_GLOW[e.type]||'#ff8800';
-    drawDog(sz,glow,12);
+    const sz=PENGUIN_SIZE[e.type]||32, glow=PENGUIN_GLOW[e.type]||'#ff8800';
+    drawPenguin(sz,glow,12);
     if (e.type==='tank') {
       const frac=e.hp/e.maxHp; ctx.shadowBlur=0;
-      ctx.fillStyle='#003322'; ctx.fillRect(-14,sz/2+DOG_OY+2,28,5);
-      ctx.fillStyle=`hsl(${frac*120},100%,45%)`; ctx.fillRect(-14,sz/2+DOG_OY+2,28*frac,5);
+      ctx.fillStyle='#003322'; ctx.fillRect(-14,sz/2+PENGUIN_OY+2,28,5);
+      ctx.fillStyle=`hsl(${frac*120},100%,45%)`; ctx.fillRect(-14,sz/2+PENGUIN_OY+2,28*frac,5);
     }
   }
   ctx.restore();
@@ -391,6 +406,61 @@ function spawnPowerup(x,y){
   if(Math.random()<0.25) powerups.push({x,y,type:Math.random()<0.5?'bomb':'life',vy:1.5});
 }
 
+function spawnScream(x,y){
+  const text=PENGUIN_SCREAMS[Math.floor(Math.random()*PENGUIN_SCREAMS.length)];
+  screams.push({
+    x, y:y-10,
+    text,
+    timer:0, maxTime:90,
+    vx:(Math.random()-0.5)*0.6,
+    vy:-0.9,
+    baseRot:(Math.random()-0.5)*0.3,
+  });
+}
+
+function drawScreams(){
+  screams.forEach(s=>{
+    const t=s.timer/s.maxTime;          // 0→1
+    const alpha=t>0.65?1-(t-0.65)/0.35:1;
+
+    // ポップイン：0-10%で1.8倍→通常、その後ブルブル
+    const scale=t<0.11?1+(1-t/0.11)*0.8
+              :1+Math.sin(s.timer*0.8)*0.06;
+
+    ctx.save();
+    ctx.globalAlpha=alpha;
+    ctx.translate(s.x, s.y);
+    ctx.rotate(s.baseRot+Math.sin(s.timer*0.25)*0.1);
+    ctx.scale(scale,scale);
+    ctx.textAlign='center';
+    ctx.textBaseline='middle';
+
+    // サイズは文字数で少し調整
+    const fsize=s.text.length>8?13:15;
+    ctx.font=`bold ${fsize}px "Hiragino Kaku Gothic ProN","Meiryo",sans-serif`;
+
+    // 黒縁（コミック風）
+    ctx.strokeStyle='#000022';
+    ctx.lineWidth=5;
+    ctx.strokeText(s.text,0,0);
+
+    // 本文：レインボー回転カラー
+    const hue=(s.timer*14+s.x*1.5)%360;
+    ctx.fillStyle=`hsl(${hue},100%,72%)`;
+    ctx.fillText(s.text,0,0);
+
+    // 感嘆符まわりにキラキラ
+    if(s.timer%8<4){
+      ctx.fillStyle=`hsla(${hue+60},100%,90%,0.9)`;
+      ctx.font='bold 9px sans-serif';
+      ctx.fillText('✦',18,-14);
+      ctx.fillText('✦',-20,-12);
+    }
+
+    ctx.restore();
+  });
+}
+
 // ─── Shooting ─────────────────────────────────────────────────────────────────
 function playerShoot() {
   const offsets=[0];
@@ -402,7 +472,7 @@ function playerShoot() {
 function enemyShoot(e) {
   const dx=player.x-e.x,dy=player.y-e.y,dist=Math.hypot(dx,dy)||1;
   const spd=3.5+level*0.2;
-  const oy=e.type==='boss'?e.y+BOSS_SIZE/2+DOG_OY:e.y+18;
+  const oy=e.type==='boss'?e.y+BOSS_SIZE/2+PENGUIN_OY:e.y+18;
   if (e.type==='boss') {
     if(e.phase===0){for(let i=-2;i<=2;i++){const ang=Math.atan2(dy,dx)+i*0.22;
       enemyBullets.push({x:e.x,y:oy,vx:Math.cos(ang)*spd,vy:Math.sin(ang)*spd,r:5,color:'#ff4400'});}}
@@ -496,6 +566,7 @@ function update() {
       combo++;comboTimer=120; score+=pts*Math.min(combo,8);
       spawnExplosion(e.x,e.y,e.type==='boss'?'#ff4400':'#ff8800',e.type==='boss'?60:18);
       if(e.type==='boss'){bossActive=false;levelUp();}
+      else { spawnScream(e.x, e.y); } // ペンギン断末魔
       spawnPowerup(e.x,e.y); updateUI(); return false;
     }
     return e.y<H+80;
@@ -522,6 +593,13 @@ function update() {
   });
 
   particles=particles.filter(p=>{p.x+=p.vx;p.y+=p.vy;p.vy+=0.05;p.life-=p.decay;return p.life>0;});
+
+  // 断末魔テキスト更新
+  screams=screams.filter(s=>{
+    s.x+=s.vx; s.y+=s.vy; s.timer++;
+    return s.timer<s.maxTime;
+  });
+
   updateUI();
 }
 
@@ -554,6 +632,7 @@ function draw(){
   bullets.forEach(drawBullet);
   enemies.forEach(drawEnemy);
   drawPlayer();
+  drawScreams(); // ペンギン断末魔（一番手前に描画）
 
   // ボムHUD（キーボード用）
   if (!isMobile){
